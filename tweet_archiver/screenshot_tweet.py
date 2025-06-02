@@ -57,9 +57,12 @@ def load_cookies(cookie_file='cookies.json'):
 def setup_driver(headless=True):
     """Set up and return a Chrome WebDriver with options."""
     chrome_options = Options()
-    if headless:
-        chrome_options.add_argument('--headless')
-        chrome_options.add_argument('--disable-gpu')
+    
+    # Disable GPU acceleration to avoid issues
+    chrome_options.add_argument('--disable-gpu')
+    
+    chrome_options.add_argument('--headless')
+    
     chrome_options.add_argument('--window-size=1200,12000')
     chrome_options.add_argument('--disable-notifications')
     
@@ -101,39 +104,58 @@ def wait_for_images_to_load(driver, element, timeout=10):
         print(f"Warning: Some images might not have loaded: {e}")
         return False
 
-def take_tweet_screenshot(driver, tweet_id, output_dir='screenshots'):
-    """Take a screenshot of a tweet by its ID, waiting for all content to load."""
+def take_tweet_screenshot(tweet_id, output_dir='screenshots', headless=True):
+    """
+    Take a screenshot of a tweet and its entire conversation thread.
+    
+    Args:
+        tweet_id (str): The ID of the tweet to capture
+        output_dir (str): Directory to save screenshots. Defaults to 'screenshots'.
+        headless (bool): Whether to run the browser in headless mode. Defaults to True.
+        
+    Returns:
+        bool: True if screenshot was successful, False otherwise
+    """
     # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
     
     # Construct tweet URL
     url = f'https://x.com/i/web/status/{tweet_id}'
     
+    driver = None
     try:
+        # Set up the WebDriver
+        driver = setup_driver(headless=headless)
+        
+        # Load cookies for authentication
+        cookies = load_cookies()
+        driver.get('https://x.com')
+        add_cookies(driver, cookies)
+        
         print(f"Opening tweet: {url}")
         driver.get(url)
         
-        # Wait for the main tweet content to load
+        # Wait for the conversation to load
         try:
-            # First wait for the tweet container
-            tweet_element = WebDriverWait(driver, 15).until(
+            # Wait for the conversation container
+            conversation_container = WebDriverWait(driver, 15).until(
                 EC.presence_of_element_located((
                     By.CSS_SELECTOR, 
+                    'div[data-testid="cellInnerDiv"]'
+                ))
+            )
+            
+            # Wait for all tweets in the conversation to load
+            WebDriverWait(driver, 10).until(
+                EC.presence_of_all_elements_located((
+                    By.CSS_SELECTOR,
                     'article[data-testid="tweet"]'
                 ))
             )
             
-            # Wait for tweet text to be visible
-            WebDriverWait(driver, 10).until(
-                EC.visibility_of_element_located((By.CSS_SELECTOR, 'div[data-testid="tweetText"]'))
-            )
-            
-            # Wait for images to load
-            wait_for_images_to_load(driver, tweet_element)
-            
-            # Try to find and click "Translate post" button if it exists
+            # Handle translation if needed (for the main tweet)
             try:
-                print("Waiting for 'Translate post' button...")
+                # Try to find and click "Translate post" button if it exists
                 translate_button = WebDriverWait(driver, 3).until(
                     EC.element_to_be_clickable((
                         By.XPATH, 
@@ -141,14 +163,12 @@ def take_tweet_screenshot(driver, tweet_id, output_dir='screenshots'):
                         '//span[text()="Translate post"]/ancestor::button'  # Or with actual button element
                     ))
                 )
-                # Scroll to the button and click it
-                print("Scrolling to and clicking 'Translate post' button...")
+                print("Found and clicking 'Translate post' button...")
                 driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", translate_button)
-                time.sleep(0.5)  # Small delay for any animations
+                time.sleep(0.5)
                 translate_button.click()
                 
                 # Wait for translation to complete
-                print("Waiting for translation to complete...")
                 WebDriverWait(driver, 10).until(
                     EC.presence_of_element_located((
                         By.XPATH,
@@ -165,27 +185,60 @@ def take_tweet_screenshot(driver, tweet_id, output_dir='screenshots'):
                 except Exception as e:
                     print(f"Could not find/remove feedback element: {e}")
                 
-                time.sleep(1)  # Additional time for any lazy-loaded content
-                
             except (TimeoutException, Exception) as e:
                 # If no translate button or any other error, just continue
                 pass
             
-            # Small delay to ensure everything is rendered
+            # Add a small delay to ensure everything is rendered
             time.sleep(1)
             
-            # Scroll the tweet into view and add some margin at the top
-            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", tweet_element)
-            driver.execute_script("window.scrollBy(0, -100);")  # Scroll up a bit to show more context
-            
-        except TimeoutException as e:
-            print(f"Timed out waiting for tweet content to load: {e}")
-            return False
+            # Find the conversation container and set its height
+            try:
+                # Scroll to the very top of the page first
+                driver.execute_script("window.scrollTo(0, 0);")
+                time.sleep(0.5)  # Small delay for the scroll to complete
+                    
+                # Find the conversation timeline and get its first child with position: relative
+                conversation = WebDriverWait(driver, 10).until(
+                    lambda d: d.find_element(
+                        By.CSS_SELECTOR, 
+                        'div[aria-label="Timeline: Conversation"] > div[style*="position: relative"]'
+                    )
+                )
+                
+                
+                # Calculate and set the appropriate height
+                height_script = """
+                const replyElement = document.querySelector('[data-testid=inline_reply_offscreen]');
+                const height = replyElement ? (replyElement.getBoundingClientRect().top - 53) + 'px' : 'auto';
+                arguments[0].style.minHeight = height;
+                return arguments[0].getBoundingClientRect().height;
+                """
+                
+                # Execute the script and get the calculated height
+                calculated_height = driver.execute_script(height_script, conversation)
+                print(f"Set conversation height to: {calculated_height}px")
+                
+                # Small delay to ensure the height is applied
+                time.sleep(5)
+                
+                # Take screenshot of the conversation container
+                screenshot_path = os.path.join(output_dir, f'{tweet_id}.png')
+                conversation.screenshot(screenshot_path)
+                return True
+                
+            except Exception as e:
+                print(f"Error capturing conversation: {e}")
+                # Fallback to the original method if the new approach fails
+                driver.execute_script("arguments[0].scrollIntoView(true);", conversation_container)
+                time.sleep(0.5)
+                screenshot_path = os.path.join(output_dir, f'{tweet_id}.png')
+                conversation_container.screenshot(screenshot_path)
+                return True
         
-        # Take screenshot of just the tweet element
-        screenshot_path = os.path.join(output_dir, f'tweet_{tweet_id}.png')
-        tweet_element.screenshot(screenshot_path)
-        return True
+        except Exception as e:
+            print(f"Error taking screenshot: {e}")
+            return False
         
     except Exception as e:
         print(f"Error taking screenshot: {e}")
@@ -221,7 +274,7 @@ def capture_tweet_screenshot(tweet_id, output_dir='screenshots', headless=True, 
         
         # Take the screenshot
         success = take_tweet_screenshot(driver, tweet_id, output_dir)
-        output_path = os.path.join(output_dir, f'tweet_{tweet_id}.png')
+        output_path = os.path.join(output_dir, f'{tweet_id}.png')
         
         if success:
             print(f"Screenshot saved to: {output_path}")
