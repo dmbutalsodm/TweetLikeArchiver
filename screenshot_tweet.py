@@ -58,7 +58,7 @@ def setup_driver(headless=True):
     """Set up and return a Chrome WebDriver with options."""
     chrome_options = Options()
     if headless:
-        #chrome_options.add_argument('--headless')
+        chrome_options.add_argument('--headless')
         chrome_options.add_argument('--disable-gpu')
     chrome_options.add_argument('--window-size=1200,12000')
     chrome_options.add_argument('--disable-notifications')
@@ -89,6 +89,7 @@ def add_cookies(driver, cookies):
 
 def wait_for_images_to_load(driver, element, timeout=10):
     """Wait for all images within an element to load."""
+    print("Waiting for images to load...")
     try:
         WebDriverWait(driver, timeout).until(
             lambda d: all(img.get_attribute('complete') == 'true' 
@@ -132,24 +133,38 @@ def take_tweet_screenshot(driver, tweet_id, output_dir='screenshots'):
             
             # Try to find and click "Translate post" button if it exists
             try:
-                translate_button = WebDriverWait(driver, 10).until(
+                print("Waiting for 'Translate post' button...")
+                translate_button = WebDriverWait(driver, 3).until(
                     EC.element_to_be_clickable((
                         By.XPATH, 
-                        '//span[contains(text(), "Translate post")]/ancestor::div[@role="button"]'
+                        '//span[text()="Translate post"]/ancestor::div[contains(@role, "button")] | '  # Try with div role="button"
+                        '//span[text()="Translate post"]/ancestor::button'  # Or with actual button element
                     ))
                 )
                 # Scroll to the button and click it
+                print("Scrolling to and clicking 'Translate post' button...")
                 driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", translate_button)
                 time.sleep(0.5)  # Small delay for any animations
                 translate_button.click()
                 
                 # Wait for translation to complete
+                print("Waiting for translation to complete...")
                 WebDriverWait(driver, 10).until(
                     EC.presence_of_element_located((
                         By.XPATH,
                         '//span[contains(text(), "Translated from")]'
                     ))
                 )
+                
+                # Remove translation feedback element if it exists
+                try:
+                    feedback_xpath = '//span[contains(text(), "Was this translation accurate?")]/ancestor::div[1]'
+                    feedback_element = driver.find_element(By.XPATH, feedback_xpath)
+                    driver.execute_script("arguments[0].remove();", feedback_element)
+                    print("Removed translation feedback element")
+                except Exception as e:
+                    print(f"Could not find/remove feedback element: {e}")
+                
                 time.sleep(1)  # Additional time for any lazy-loaded content
                 
             except (TimeoutException, Exception) as e:
