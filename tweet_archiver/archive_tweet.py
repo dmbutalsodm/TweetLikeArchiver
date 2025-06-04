@@ -14,8 +14,8 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 # Import local modules
-from .screenshot_tweet import take_tweet_screenshot
-from .download_tweet_media import download_tweet_media
+from tweet_archiver.screenshot_tweet import take_tweet_screenshot
+from tweet_archiver.download_tweet_media import download_tweet_media
 
 def extract_tweet_id(url_or_id: str) -> str:
     """Extract tweet ID from URL or return as is if it's already an ID."""
