@@ -31,7 +31,8 @@ class TwitterScraper:
         self.cookies_file = cookies_file
         self.base_url = "https://x.com"
         self.driver = None
-        self.tweet_ids = OrderedDict()  # Use OrderedDict to maintain insertion order
+        self.tweet_ids_this_run = OrderedDict()  # Use OrderedDict to maintain insertion order and for deduplication
+        self.already_saved_tweet_ids = set()  # Store existing IDs separately from new ones
     
     def setup_browser(self, headless=False):
         """Set up the Chrome WebDriver with options."""
@@ -145,14 +146,44 @@ class TwitterScraper:
         except TimeoutException:
             print("Warning: Could not detect tweets on the likes page. Page might not have loaded properly.")
     
+    def load_existing_tweet_ids(self, filename: str = 'liked_tweet_ids.txt') -> None:
+        """Load existing tweet IDs from file."""
+        if not os.path.exists(filename):
+            print("No existing tweet IDs file found. Starting fresh.")
+            return
+            
+        try:
+            with open(filename, 'r', encoding='utf-8') as f:
+                # Read all lines and remove empty lines
+                existing_ids = [line.strip() for line in f if line.strip()]
+                
+                if not existing_ids:
+                    print("No tweet IDs found in the file.")
+                    return
+                    
+                print(f"Found {len(existing_ids)} existing tweet IDs in {filename}")
+                print(f"First few IDs: {existing_ids[:3]}...")
+                print(f"Last few IDs: {existing_ids[-3:]}...")
+                
+                for tweet_id in existing_ids:
+                    self.already_saved_tweet_ids.add(tweet_id)
+                    
+                print(f"Loaded {len(self.already_saved_tweet_ids)} existing tweet IDs for reference.")
+                
+        except Exception as e:
+            print(f"Error loading existing tweet IDs: {str(e)}")
+            import traceback
+            traceback.print_exc()
+    
     def extract_tweet_ids(self) -> Set[str]:
         """Extract tweet IDs from the currently loaded tweets."""
-        new_ids = set()
+        ids_from_this_scan = set()
         
         # Find all tweet articles
         tweets = self.driver.find_elements(By.CSS_SELECTOR, 'article[data-testid="tweet"]')
+        print(f"Found {len(tweets)} tweet elements on the page")
         
-        for tweet in tweets:
+        for i, tweet in enumerate(tweets, 1):
             try:
                 # Get the tweet's permalink
                 links = tweet.find_elements(By.CSS_SELECTOR, 'a[href*="/status/"]')
@@ -163,22 +194,31 @@ class TwitterScraper:
                     match = re.search(r'/status/(\d+)', href)
                     if match:
                         tweet_id = match.group(1)
-                        if tweet_id not in self.tweet_ids:
-                            new_ids.add(tweet_id)
-                            self.tweet_ids[tweet_id] = None  # Using OrderedDict to maintain order
+                        
+                        # Add new ID to our tracking
+                        ids_from_this_scan.add(tweet_id)
+
+                        if tweet_id not in self.tweet_ids_this_run and tweet_id not in self.already_saved_tweet_ids:
+                            # Only add once to preserve ordering
+                            self.tweet_ids_this_run[tweet_id] = None
+                            print(f"Added new tweet ID: {tweet_id}")
+
+                        break  # Move to next tweet after finding first valid link
+                        
             except Exception as e:
                 print(f"Error extracting tweet ID: {str(e)}")
         
-        return new_ids
+        print(f"Extracted {len(ids_from_this_scan)} new tweet IDs in this batch")
+        return ids_from_this_scan
     
-    def scroll_and_extract(self, max_scrolls: int = None):
+    def scroll_and_extract(self):
         """Scroll through the page and extract tweet IDs."""
         # Initial scroll position
         self.driver.execute_script("window.scrollTo(0, 0);")
         
         # Extract tweet IDs from the initial view
         new_ids = self.extract_tweet_ids()
-        previous_ids_count = len(self.tweet_ids)
+        previous_ids_count = len(self.tweet_ids_this_run)
         
         print("Starting to scroll and extract tweet IDs...")
         
@@ -188,9 +228,9 @@ class TwitterScraper:
         total_scroll_position = 0
         no_new_tweets_count = 0
         
-        while max_scrolls is None or scroll_count < max_scrolls:
-            # Scroll down 1x viewport height each time for more gradual scrolling
-            scroll_amount = viewport_height 
+        while True:
+            # Scroll down 0.5x viewport height each time for more gradual scrolling
+            scroll_amount = viewport_height / 2
             total_scroll_position += scroll_amount
             
             # Scroll to the new position
@@ -201,34 +241,18 @@ class TwitterScraper:
             
             # Extract tweet IDs from the new content
             new_ids = self.extract_tweet_ids()
-            # Add new IDs to the ordered dict
-            for tweet_id in new_ids:
-                self.tweet_ids[tweet_id] = None
             
+            # Check if any of the newly found IDs are in the already saved set
+            if any(tweet_id in self.already_saved_tweet_ids for tweet_id in new_ids):
+                print("Found already saved tweet IDs in the new batch. Aborting.")
+                break
+
+
             # Check if we found new tweets
-            current_count = len(self.tweet_ids)
+            current_count = len(self.tweet_ids_this_run)
             if current_count > previous_ids_count:
-                # Reset the counter if we found new tweets
-                no_new_tweets_count = 0
                 print(f"Scroll #{scroll_count+1}: Found {current_count - previous_ids_count} new tweets (Total: {current_count})")
                 previous_ids_count = current_count
-                
-                # Save more frequently
-                if current_count % 20 == 0:
-                    self.save_tweet_ids()
-            else:
-                # Keep track of how many scrolls with no new tweets
-                no_new_tweets_count += 1
-                print(f"Scroll #{scroll_count+1}: No new tweets found (still at {current_count})")
-                
-                # If we've scrolled 5 times with no new tweets, try scrolling a bit more
-                if no_new_tweets_count >= 5:
-                    print("No new tweets for several scrolls, jumping ahead...")
-                    jump_amount = viewport_height * 2
-                    total_scroll_position += jump_amount
-                    self.driver.execute_script(f"window.scrollTo(0, {total_scroll_position});")
-                    time.sleep(scroll_pause_time * 1.5)  # Wait a bit longer after a jump
-                    no_new_tweets_count = 0  # Reset the counter
             
             # Check if we're at the bottom of the page
             current_position = self.driver.execute_script("return window.pageYOffset || document.documentElement.scrollTop;")
@@ -239,42 +263,45 @@ class TwitterScraper:
                 print("Near the bottom of the page, waiting for more content to load...")
                 time.sleep(scroll_pause_time * 2)
                 
-                # Calculate new total height
-                new_total_height = self.driver.execute_script("return Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);")
-                
-                # Check if the height has increased (meaning more content loaded)
-                if new_total_height <= total_height:
-                    # Try a refresh if we're at the bottom and no new content is loading
-                    if no_new_tweets_count >= 10:
-                        print("No new content loading. Refreshing the page...")
-                        current_url = self.driver.current_url
-                        self.driver.refresh()
-                        time.sleep(5)  # Wait for the page to fully refresh
-                        total_scroll_position = 0  # Reset scroll position
-                        no_new_tweets_count = 0  # Reset counter
-                    elif no_new_tweets_count >= 15:
-                        print("Reached the end of the likes feed or no new content is loading.")
-                        break
-            
             scroll_count += 1
             
-            # Save progress more frequently
-            if scroll_count % 5 == 0:
-                self.save_tweet_ids()
-        
         # Final save
         self.save_tweet_ids()
-        print(f"Finished scrolling. Found {len(self.tweet_ids)} total liked tweets.")
+        print(f"Finished scrolling. Found {len(self.tweet_ids_this_run)} total liked tweets.")
     
     def save_tweet_ids(self, filename: str = 'liked_tweet_ids.txt'):
-        """Save the collected tweet IDs to a file in the order they were scraped."""
+        """Save the collected tweet IDs to a file, prepending new ones to the existing file."""
         try:
+            # Only save if we have new tweets
+            if not self.tweet_ids_this_run:
+                print("No new tweet IDs to save.")
+                return
+                
+            # Get new tweet IDs (already in order)
+            new_tweet_ids = list(self.tweet_ids_this_run.keys())
+            
+            # Read existing content if file exists
+            existing_ids_from_file = set()
+            if os.path.exists(filename):
+                with open(filename, 'r', encoding='utf-8') as f:
+                    existing_ids_from_file = {line.strip() for line in f if line.strip()}
+            
+            # Combine new and existing IDs, removing duplicates
+            combined_ids = new_tweet_ids + [tid for tid in existing_ids_from_file if tid not in self.tweet_ids_this_run]
+            
+            # Write all IDs back to file
             with open(filename, 'w', encoding='utf-8') as f:
-                for tweet_id in self.tweet_ids.keys():  # Maintains insertion order
+                for tweet_id in combined_ids:
                     f.write(f"{tweet_id}\n")
-            print(f"Saved {len(self.tweet_ids)} tweet IDs to {filename}")
+            
+            new_count = len(new_tweet_ids)
+            existing_count = len(combined_ids) - new_count
+            print(f"Saved {new_count} new tweet IDs and {existing_count} existing IDs to {filename} (total: {len(combined_ids)})")
+            
         except Exception as e:
             print(f"Error saving tweet IDs to file: {str(e)}")
+            import traceback
+            traceback.print_exc()
     
     def close(self):
         """Close the WebDriver."""
@@ -282,9 +309,12 @@ class TwitterScraper:
             self.driver.quit()
             print("WebDriver closed.")
     
-    def run(self, username: str = None, max_scrolls: int = None, headless: bool = False):
+    def run(self, username: str = None, headless: bool = False, output_file: str = 'liked_tweet_ids.txt'):
         """Run the full scraping process."""
         try:
+            # Load existing tweet IDs and cache the most recent ones
+            self.load_existing_tweet_ids(output_file)
+            
             # Load cookies from file or extract them
             cookies = None
             try:
@@ -330,16 +360,16 @@ class TwitterScraper:
                 return []
             
             # Perform the scrolling and extraction
-            self.scroll_and_extract(max_scrolls)
+            self.scroll_and_extract()
             
             # Return the collected tweet IDs
-            return list(self.tweet_ids)
+            return list(self.tweet_ids_this_run)
             
         except Exception as e:
             print(f"An error occurred: {str(e)}")
             import traceback
             traceback.print_exc()
-            return list(self.tweet_ids)  # Return any IDs we collected before the error
+            return list(self.tweet_ids_this_run)  # Return any IDs we collected before the error
         finally:
             self.close()
 
@@ -366,7 +396,6 @@ def main():
         
         # Create and run the scraper
         username = args.username  # None means the logged-in user
-        max_scrolls = args.max_scrolls  # None means unlimited scrolling
         headless = not args.no_headless  # By default, run in headless mode
         output_file = args.output
         
@@ -375,14 +404,13 @@ def main():
         print("Press Ctrl+C at any time to stop and save current progress.\n")
         
         scraper = TwitterScraper(str(cookies_file))
-        liked_tweet_ids = scraper.run(username, max_scrolls, headless)
+        liked_tweet_ids = scraper.run(username, headless)
         
         if liked_tweet_ids:
             print(f"\nSuccessfully scraped {len(liked_tweet_ids)} liked tweets.")
             print(f"All tweet IDs have been saved to '{output_file}'")
         else:
-            print("\nNo liked tweets were found or there was an error during scraping.")
-            print("Please check if you're logged in correctly or if Twitter's page structure has changed.")
+            print("\nNo new liked tweets were found.")
         
     except KeyboardInterrupt:
         print("\nOperation cancelled by user. Saving current progress...")
