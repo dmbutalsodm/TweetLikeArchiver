@@ -247,7 +247,6 @@ class TwitterScraper:
                 print("Found already saved tweet IDs in the new batch. Aborting.")
                 break
 
-
             # Check if we found new tweets
             current_count = len(self.tweet_ids_this_run)
             if current_count > previous_ids_count:

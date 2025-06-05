@@ -14,6 +14,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
+from PIL import Image
 
 def load_cookies(cookie_file='cookies.json'):
     """
@@ -61,7 +62,8 @@ def setup_driver(headless=True):
     # Disable GPU acceleration to avoid issues
     chrome_options.add_argument('--disable-gpu')
     
-    chrome_options.add_argument('--headless')
+    if headless:
+        chrome_options.add_argument('--headless')
     
     chrome_options.add_argument('--window-size=1200,12000')
     chrome_options.add_argument('--disable-notifications')
@@ -206,11 +208,11 @@ def take_tweet_screenshot(tweet_id, output_dir='screenshots', headless=True):
                     )
                 )
                 
-                
+                # const conversation = document.querySelector('div[aria-label="Timeline: Conversation"] > div[style*="position: relative"]');
                 # Calculate and set the appropriate height
                 height_script = """
-                const replyElement = document.querySelector('[data-testid=inline_reply_offscreen]');
-                const height = replyElement ? (replyElement.getBoundingClientRect().top - 53) + 'px' : 'auto';
+                const replyElement = document.querySelector('[data-testid=inline_reply_offscreen]') || document.querySelector('[aria-live=polite][role=status]');
+                let height = replyElement ? (replyElement.getBoundingClientRect().top - 53) + 'px' : document.body.scrollHeight + 'px';
                 arguments[0].style.minHeight = height;
                 return arguments[0].getBoundingClientRect().height;
                 """
@@ -223,8 +225,15 @@ def take_tweet_screenshot(tweet_id, output_dir='screenshots', headless=True):
                 time.sleep(5)
                 
                 # Take screenshot of the conversation container
+                # Crop the screenshot to the determined height
                 screenshot_path = os.path.join(output_dir, f'{tweet_id}.png')
                 conversation.screenshot(screenshot_path)
+
+                print("Cropping screenshot...")
+                image = Image.open(screenshot_path)
+                width, height = image.size
+                cropped_image = image.crop((0, 0, width, calculated_height))
+                cropped_image.save(screenshot_path)
                 return True
                 
             except Exception as e:
