@@ -17,3 +17,6 @@ cookies.json
 # Screenshots directory
 screenshots/
 archive/
+
+# State files
+*.txt

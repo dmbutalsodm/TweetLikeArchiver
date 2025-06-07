@@ -286,10 +286,10 @@ class TwitterScraper:
             new_tweet_ids = list(self.tweet_ids_this_run.keys())
             
             # Read existing content if file exists
-            existing_ids_from_file = set()
+            existing_ids_from_file = []
             if os.path.exists(filename):
                 with open(filename, 'r', encoding='utf-8') as f:
-                    existing_ids_from_file = {line.strip() for line in f if line.strip()}
+                    existing_ids_from_file = [line.strip() for line in f if line.strip()]
             
             # Combine new and existing IDs, removing duplicates
             combined_ids = new_tweet_ids + [tid for tid in existing_ids_from_file if tid not in self.tweet_ids_this_run]
