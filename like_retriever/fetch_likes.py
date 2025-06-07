@@ -213,60 +213,66 @@ class TwitterScraper:
     
     def scroll_and_extract(self):
         """Scroll through the page and extract tweet IDs."""
-        # Initial scroll position
-        self.driver.execute_script("window.scrollTo(0, 0);")
-        
-        # Extract tweet IDs from the initial view
-        new_ids = self.extract_tweet_ids()
-        previous_ids_count = len(self.tweet_ids_this_run)
-        
-        print("Starting to scroll and extract tweet IDs...")
-        
-        scroll_count = 0
-        scroll_pause_time = 3  # Longer pause between scrolls to allow rendering
-        viewport_height = self.driver.execute_script("return window.innerHeight")
-        total_scroll_position = 0
-        no_new_tweets_count = 0
-        
-        while True:
-            # Scroll down 0.5x viewport height each time for more gradual scrolling
-            scroll_amount = viewport_height / 2
-            total_scroll_position += scroll_amount
+        try:
+            # Initial scroll position
+            self.driver.execute_script("window.scrollTo(0, 0);")
             
-            # Scroll to the new position
-            self.driver.execute_script(f"window.scrollTo(0, {total_scroll_position});")
-            
-            # Wait for the page to load and render new content
-            time.sleep(scroll_pause_time)
-            
-            # Extract tweet IDs from the new content
+            # Extract tweet IDs from the initial view
             new_ids = self.extract_tweet_ids()
+            previous_ids_count = len(self.tweet_ids_this_run)
             
-            # Check if any of the newly found IDs are in the already saved set
-            if any(tweet_id in self.already_saved_tweet_ids for tweet_id in new_ids):
-                print("Found already saved tweet IDs in the new batch. Aborting.")
-                break
-
-            # Check if we found new tweets
-            current_count = len(self.tweet_ids_this_run)
-            if current_count > previous_ids_count:
-                print(f"Scroll #{scroll_count+1}: Found {current_count - previous_ids_count} new tweets (Total: {current_count})")
-                previous_ids_count = current_count
+            print("Starting to scroll and extract tweet IDs...")
+            print("Press Ctrl+C at any time to save progress and exit.")
             
-            # Check if we're at the bottom of the page
-            current_position = self.driver.execute_script("return window.pageYOffset || document.documentElement.scrollTop;")
-            total_height = self.driver.execute_script("return Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);")
+            scroll_count = 0
+            scroll_pause_time = 2  # Longer pause between scrolls to allow rendering
+            viewport_height = self.driver.execute_script("return window.innerHeight")
+            total_scroll_position = 0
+            no_new_tweets_count = 0
             
-            # If we're close to the bottom, wait for more content to load
-            if (total_height - current_position - viewport_height) < 200:
-                print("Near the bottom of the page, waiting for more content to load...")
-                time.sleep(scroll_pause_time * 2)
+            while True:
+                # Scroll down 0.5x viewport height each time for more gradual scrolling
+                scroll_amount = viewport_height / 2
+                total_scroll_position += scroll_amount
                 
-            scroll_count += 1
-            
-        # Final save
-        self.save_tweet_ids()
-        print(f"Finished scrolling. Found {len(self.tweet_ids_this_run)} total liked tweets.")
+                # Scroll to the new position
+                self.driver.execute_script(f"window.scrollTo(0, {total_scroll_position});")
+                
+                # Wait for the page to load and render new content
+                time.sleep(scroll_pause_time)
+                
+                # Extract tweet IDs from the new content
+                new_ids = self.extract_tweet_ids()
+                
+                # Check if any of the newly found IDs are in the already saved set
+                if any(tweet_id in self.already_saved_tweet_ids for tweet_id in new_ids):
+                    print("Found already saved tweet IDs in the new batch. Stopping...")
+                    break
+
+                # Check if we found new tweets
+                current_count = len(self.tweet_ids_this_run)
+                if current_count > previous_ids_count:
+                    print(f"Scroll #{scroll_count+1}: Found {current_count - previous_ids_count} new tweets (Total: {current_count})")
+                    previous_ids_count = current_count
+                
+                # Check if we're at the bottom of the page
+                current_position = self.driver.execute_script("return window.pageYOffset || document.documentElement.scrollTop;")
+                total_height = self.driver.execute_script("return Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);")
+                
+                # If we're close to the bottom, wait for more content to load
+                if (total_height - current_position - viewport_height) < 200:
+                    print("Near the bottom of the page, waiting for more content to load...")
+                    time.sleep(scroll_pause_time * 2)
+                    
+                scroll_count += 1
+                
+        except Exception as e:
+            print(f"\nAn error occurred: {str(e)}")
+        finally:
+            # Final save (runs whether the loop completes or is interrupted)
+            saved_count = len(self.tweet_ids_this_run)
+            self.save_tweet_ids()
+            print(f"\nSaved {saved_count} total liked tweets to file.")
     
     def save_tweet_ids(self, filename: str = 'liked_tweet_ids.txt'):
         """Save the collected tweet IDs to a file, prepending new ones to the existing file."""
@@ -411,8 +417,6 @@ def main():
         else:
             print("\nNo new liked tweets were found.")
         
-    except KeyboardInterrupt:
-        print("\nOperation cancelled by user. Saving current progress...")
     except Exception as e:
         print(f"\nAn unexpected error occurred: {str(e)}")
         import traceback

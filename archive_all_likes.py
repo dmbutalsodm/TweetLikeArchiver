@@ -4,7 +4,7 @@ from pathlib import Path
 from tweet_archiver.archive_tweet import archive_tweet
 
 # Configuration
-INPUT_FILE = 'liked_tweet_ids_old.txt'
+INPUT_FILE = 'liked_tweet_ids.txt'
 STATE_FILE = 'last_archived_id.txt'
 DELAY_SECONDS = 5
 
