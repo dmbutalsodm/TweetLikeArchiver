@@ -180,7 +180,7 @@ def take_tweet_screenshot(tweet_id, output_dir='screenshots', headless=True):
                 
                 # Remove translation feedback element if it exists
                 try:
-                    feedback_xpath = '//span[contains(text(), "Was this translation accurate?")]/ancestor::div[1]'
+                    feedback_xpath = '//span[contains(text(), "Rate this translation")]/ancestor::div[1]'
                     feedback_element = driver.find_element(By.XPATH, feedback_xpath)
                     driver.execute_script("arguments[0].remove();", feedback_element)
                     print("Removed translation feedback element")
